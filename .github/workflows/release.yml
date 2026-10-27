@@ -1,0 +1,55 @@
+name: release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Get package info
+        id: package
+        run: |
+          METADATA=$(cargo metadata --format-version 1 --no-deps)
+
+          NAME=$(echo "$METADATA" | jq -r '.packages[0].name')
+          VERSION=$(echo "$METADATA" | jq -r '.packages[0].version')
+
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compile
+        run: cargo build --release --locked
+
+      - name: Prepare binary
+        env:
+          NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          cp "target/release/$NAME" \
+            "target/$NAME-linux-x86_64"
+
+          tar -czf "target/$NAME-linux-x86_64.tar.gz" \
+            -C target "$NAME-linux-x86_64"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ steps.package.outputs.name }}
+          VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          gh release create "$VERSION" \
+            "target/$NAME-linux-x86_64.tar.gz" \
+            --title "$VERSION" \
+            --generate-notes \
+            --draft
