@@ -11,21 +11,36 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+
+          - name: aarch64
+            os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+
+    name: build - ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       - name: Formatting
         run: cargo fmt --all -- --check
 
       - name: Linting
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --target ${{ matrix.target }} -- -D warnings
 
       - name: Compile
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Test
-        run: cargo test --release --locked
+        run: cargo test --release --locked --target ${{ matrix.target }}

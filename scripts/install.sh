@@ -4,12 +4,17 @@ set -eu
 REPO="GOFNY/minelab-linux-installer"
 NAME="minelab-linux-installer"
 DEST="$HOME/.local/bin"
-ARCHIVE="$NAME-linux-x86_64.tar.gz"
 
-if [ "$(uname -m)" != "x86_64" ]; then
-  echo "Unsupported architecture: $(uname -m)" >&2
-  exit 1
-fi
+case "$(uname -m)" in
+  x86_64) TARGET="x86_64" ;;
+  aarch64|arm64) TARGET="aarch64" ;;
+  *)
+    echo "Unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+ARCHIVE="$NAME-linux-$TARGET.tar.gz"
 
 mkdir -p "$DEST"
 
@@ -22,6 +27,6 @@ curl -fsSL \
 
 tar -xzf "$TMP_DIR/$ARCHIVE" -C "$TMP_DIR"
 
-install -m 755 "$TMP_DIR/$NAME-linux-x86_64" "$DEST/$NAME"
+install -m 755 "$TMP_DIR/$NAME-linux-$TARGET" "$DEST/$NAME"
 
 exec "$DEST/$NAME" "$PWD" "$@" < /dev/tty
