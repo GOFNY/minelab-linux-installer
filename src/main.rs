@@ -1,6 +1,14 @@
 mod download;
 mod manifest;
 mod progress;
+mod state;
+
+use std::collections::BTreeSet;
+use std::io::ErrorKind;
+
+use crate::download::{download_mod, needs_download};
+use crate::progress::Progress;
+use crate::state::State;
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -11,9 +19,7 @@ use clap::Parser;
 use futures_util::{StreamExt, stream};
 use reqwest::Client;
 
-use crate::download::{download_mod, needs_download};
 use crate::manifest::{ModEntry, fetch_manifest};
-use crate::progress::Progress;
 
 const MANIFEST_URL: &str = "https://kauedev.com/minelab/mods.json";
 const CONCURRENCY: usize = 4;
@@ -29,6 +35,19 @@ fn confirm(message: &str) -> Result<bool> {
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     Ok(answer.trim().eq_ignore_ascii_case("s"))
+}
+
+async fn remove_stale(mods_dir: &Path, previous: &State, current: &BTreeSet<String>) -> Result<()> {
+    for name in previous.mods.difference(current) {
+        match tokio::fs::remove_file(mods_dir.join(name)).await {
+            Ok(()) => println!("{name}: removido"),
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("{name}: could not remove the file"));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn find_pending(mods_dir: &Path, mods: Vec<ModEntry>) -> Result<Vec<ModEntry>> {
@@ -56,10 +75,35 @@ async fn find_pending(mods_dir: &Path, mods: Vec<ModEntry>) -> Result<Vec<ModEnt
     checked.into_iter().filter_map(Result::transpose).collect()
 }
 
+async fn download_pending(
+    client: &Client,
+    mods_dir: &Path,
+    pending: Vec<ModEntry>,
+) -> Vec<(String, String)> {
+    let total_bytes: u64 = pending.iter().map(|entry| entry.tamanho).sum();
+    let progress = Progress::new(total_bytes);
+    let progress = &progress;
+
+    let results: Vec<Result<(), (String, String)>> = stream::iter(pending)
+        .map(move |entry| async move {
+            download_mod(client, mods_dir, &entry, progress)
+                .await
+                .map_err(|error| (entry.arquivo.clone(), format!("{error:#}")))
+        })
+        .buffer_unordered(CONCURRENCY)
+        .collect()
+        .await;
+
+    let failures: Vec<(String, String)> = results.into_iter().filter_map(Result::err).collect();
+    progress.finish(failures.is_empty());
+    failures
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
     let mods_dir = args.game_dir.join("mods");
+    let state_path = args.game_dir.join("minelab.json");
 
     println!("Mods serão instalados em: {}", mods_dir.display());
     if !confirm("Continuar?")? {
@@ -73,41 +117,32 @@ async fn main() -> Result<()> {
 
     let manifest = fetch_manifest(&client, MANIFEST_URL).await?;
     let mod_count = manifest.mods.len();
-    let pending = find_pending(&mods_dir, manifest.mods).await?;
-
-    if pending.is_empty() {
-        println!("Todos os {mod_count} mods já estão instalados");
-        return Ok(());
-    }
-
-    let total_bytes: u64 = pending.iter().map(|entry| entry.tamanho).sum();
-
-    let progress = Progress::new(total_bytes);
-    let client = &client;
-    let mods_dir = &mods_dir;
-    let progress = &progress;
-
-    let results: Vec<std::result::Result<(), String>> = stream::iter(pending)
-        .map(move |entry| async move {
-            let name = entry.arquivo.clone();
-            download_mod(client, mods_dir, &entry, progress)
-                .await
-                .map_err(|error| format!("{name}: {error:#}"))
-        })
-        .buffer_unordered(CONCURRENCY)
-        .collect()
-        .await;
-
-    let failures: Vec<String> = results
-        .into_iter()
-        .filter_map(|result| result.err())
+    let current: BTreeSet<String> = manifest
+        .mods
+        .iter()
+        .map(|entry| entry.arquivo.clone())
         .collect();
-    progress.finish(failures.is_empty());
+
+    let previous = state::load(&state_path).await?;
+    remove_stale(&mods_dir, &previous, &current).await?;
+
+    let pending = find_pending(&mods_dir, manifest.mods).await?;
+    let failures = if pending.is_empty() {
+        Vec::new()
+    } else {
+        download_pending(&client, &mods_dir, pending).await
+    };
+
+    let mut installed = current;
+    for (name, _) in &failures {
+        installed.remove(name);
+    }
+    state::save(&state_path, &State { mods: installed }).await?;
 
     if !failures.is_empty() {
         eprintln!("{} mod(s) falharam:", failures.len());
-        for failure in &failures {
-            eprintln!("  {failure}");
+        for (name, error) in &failures {
+            eprintln!("  {name}: {error}");
         }
         bail!("installation failed");
     }
