@@ -778,6 +778,7 @@ dependencies = [
  "indicatif",
  "reqwest",
  "serde",
+ "serde_json",
  "sha1",
  "tokio",
 ]
