@@ -1,6 +1,7 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 const TEMPLATE: &str = "{bar:40} {percent}% | {prefix} | {decimal_bytes}/{decimal_total_bytes} | {decimal_bytes_per_sec} | ETA {eta}";
+const VERIFY_TEMPLATE: &str = "{bar:40} {percent}% | verificando | {pos}/{len}";
 
 fn bar_style() -> ProgressStyle {
     ProgressStyle::with_template(TEMPLATE)
@@ -35,10 +36,6 @@ impl Progress {
         &self.overall
     }
 
-    pub fn log(&self, message: &str) {
-        self.multi.suspend(|| println!("{message}"));
-    }
-
     pub fn finish(&self, success: bool) {
         if success {
             self.overall.finish();
@@ -46,4 +43,14 @@ impl Progress {
             self.overall.abandon();
         }
     }
+}
+
+pub fn verification_bar(total: u64) -> ProgressBar {
+    let bar = ProgressBar::new(total);
+    bar.set_style(
+        ProgressStyle::with_template(VERIFY_TEMPLATE)
+            .expect("invalid progress template")
+            .progress_chars("■■ "),
+    );
+    bar
 }
