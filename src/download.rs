@@ -15,7 +15,12 @@ use crate::progress::Progress;
 
 const ATTEMPTS: u32 = 3;
 
-pub async fn install_mod(
+pub async fn needs_download(mods_dir: &Path, entry: &ModEntry) -> Result<bool> {
+    let dest = mods_dir.join(&entry.arquivo);
+    Ok(!matches_sha1(&dest, &entry.sha1).await?)
+}
+
+pub async fn download_mod(
     client: &Client,
     mods_dir: &Path,
     entry: &ModEntry,
@@ -23,12 +28,6 @@ pub async fn install_mod(
 ) -> Result<()> {
     fs::create_dir_all(mods_dir).await?;
     let dest = mods_dir.join(&entry.arquivo);
-
-    if matches_sha1(&dest, &entry.sha1).await? {
-        progress.overall().inc(entry.tamanho);
-        progress.log(&format!("{}: já instalado", entry.arquivo));
-        return Ok(());
-    }
 
     let bar = progress.add_mod(&entry.arquivo, entry.tamanho);
     let result = download_with_retry(client, entry, &dest, &bar, progress.overall()).await;
